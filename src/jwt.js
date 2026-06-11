@@ -35,17 +35,18 @@ function getJwks() {
   return jwk;
 }
 
-async function signAccessToken(payload) {
+async function signAccessToken(payload, expiresInSeconds) {
   const privateKeyPem = fs.readFileSync(path.join(__dirname, '..', 'keys', 'private.pem'), 'utf8');
   const key = await jose.importPKCS8(privateKeyPem, 'RS256');
 
   const jti = 'jwt_' + crypto.randomBytes(16).toString('hex');
+  const ttl = expiresInSeconds || config.accessTokenTTL;
 
   const jwt = await new jose.SignJWT({ ...payload, jti })
     .setProtectedHeader({ alg: 'RS256', kid: 'oauth21-key-1', typ: 'JWT' })
     .setIssuedAt()
     .setIssuer(config.issuer)
-    .setExpirationTime(`${config.accessTokenTTL}s`)
+    .setExpirationTime(`${ttl}s`)
     .sign(key);
 
   return jwt;

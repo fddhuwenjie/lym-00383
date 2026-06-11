@@ -24,6 +24,7 @@ function initDatabase() {
       client_type TEXT NOT NULL CHECK(client_type IN ('public', 'confidential')),
       redirect_uris TEXT NOT NULL,
       grant_types TEXT NOT NULL,
+      allowed_scopes TEXT,
       created_at INTEGER NOT NULL
     );
 
@@ -67,6 +68,11 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_tokens_value ON tokens(token_value);
     CREATE INDEX IF NOT EXISTS idx_auth_codes_code ON authorization_codes(code);
   `);
+
+  try {
+    db.prepare('ALTER TABLE clients ADD COLUMN allowed_scopes TEXT').run();
+  } catch (e) {
+  }
 
   const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
   if (userCount === 0) {

@@ -2,7 +2,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
 
-const BASE_URL = 'http://localhost:9999';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:9383';
 
 function request(method, path, data, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -246,7 +246,7 @@ async function runTests() {
   
   const publicKey = await jose.importJWK(jwkKey, 'RS256');
   const { payload, protectedHeader } = await jose.jwtVerify(accessToken, publicKey, {
-    issuer: 'http://localhost:9999'
+    issuer: BASE_URL
   });
   console.log('  Subject:', payload.sub);
   console.log('  Issuer:', payload.iss);

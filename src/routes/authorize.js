@@ -155,6 +155,20 @@ router.get('/authorize', (req, res) => {
     });
   }
 
+  const scopeStr = scope || 'openid profile';
+  const requestedScopes = scopeStr.split(' ').filter(Boolean);
+  const allowedScopes = client.allowed_scopes || [];
+  const allAllowed = requestedScopes.every(s => allowedScopes.includes(s));
+  if (!allAllowed) {
+    return redirectWithError(
+      redirect_uri,
+      'invalid_scope',
+      `Requested scope exceeds client allowed_scopes. Allowed: ${allowedScopes.join(' ')}`,
+      state,
+      res
+    );
+  }
+
   if (!code_challenge) {
     return redirectWithError(
       redirect_uri,
@@ -186,8 +200,6 @@ router.get('/authorize', (req, res) => {
     );
   }
 
-  const scopeStr = scope || 'openid profile';
-
   res.send(loginFormHtml(
     client,
     redirect_uri,
@@ -218,6 +230,19 @@ router.post('/authorize', express.urlencoded({ extended: true }), (req, res) => 
 
   if (!client.redirect_uris.includes(redirect_uri)) {
     return res.status(400).send('Invalid redirect_uri');
+  }
+
+  const requestedScopes = scope ? scope.split(' ').filter(Boolean) : [];
+  const allowedScopes = client.allowed_scopes || [];
+  const allAllowed = requestedScopes.every(s => allowedScopes.includes(s));
+  if (!allAllowed) {
+    return redirectWithError(
+      redirect_uri,
+      'invalid_scope',
+      `Requested scope exceeds client allowed_scopes. Allowed: ${allowedScopes.join(' ')}`,
+      state,
+      res
+    );
   }
 
   const valid = verifyUserPassword(username, password);
@@ -264,6 +289,19 @@ router.post('/authorize/consent', express.urlencoded({ extended: true }), (req, 
 
   if (!client.redirect_uris.includes(redirect_uri)) {
     return res.status(400).send('Invalid redirect_uri');
+  }
+
+  const requestedScopes = scope ? scope.split(' ').filter(Boolean) : [];
+  const allowedScopes = client.allowed_scopes || [];
+  const allAllowed = requestedScopes.every(s => allowedScopes.includes(s));
+  if (!allAllowed) {
+    return redirectWithError(
+      redirect_uri,
+      'invalid_scope',
+      `Requested scope exceeds client allowed_scopes. Allowed: ${allowedScopes.join(' ')}`,
+      state,
+      res
+    );
   }
 
   if (action === 'deny') {

@@ -1,6 +1,7 @@
 const { getDb } = require('./db');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
+const config = require('./config');
 
 function generateClientId() {
   return 'client_' + crypto.randomBytes(16).toString('hex');
@@ -10,15 +11,18 @@ function generateClientSecret() {
   return crypto.randomBytes(32).toString('hex');
 }
 
-function registerClient(clientName, clientType, redirectUris, grantTypes) {
+function registerClient(clientName, clientType, redirectUris, grantTypes, allowedScopes) {
   const db = getDb();
   const clientId = generateClientId();
   const clientSecret = clientType === 'confidential' ? generateClientSecret() : null;
   const now = Math.floor(Date.now() / 1000);
+  const scopes = allowedScopes && Array.isArray(allowedScopes) && allowedScopes.length > 0
+    ? allowedScopes
+    : config.defaultScopes;
 
   const stmt = db.prepare(`
-    INSERT INTO clients (client_id, client_secret, client_name, client_type, redirect_uris, grant_types, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO clients (client_id, client_secret, client_name, client_type, redirect_uris, grant_types, allowed_scopes, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   stmt.run(
@@ -28,6 +32,7 @@ function registerClient(clientName, clientType, redirectUris, grantTypes) {
     clientType,
     JSON.stringify(redirectUris),
     JSON.stringify(grantTypes),
+    JSON.stringify(scopes),
     now
   );
 
@@ -38,6 +43,7 @@ function registerClient(clientName, clientType, redirectUris, grantTypes) {
     client_type: clientType,
     redirect_uris: redirectUris,
     grant_types: grantTypes,
+    allowed_scopes: scopes,
     created_at: now
   };
 }
@@ -50,7 +56,8 @@ function getClientById(clientId) {
   return {
     ...row,
     redirect_uris: JSON.parse(row.redirect_uris),
-    grant_types: JSON.parse(row.grant_types)
+    grant_types: JSON.parse(row.grant_types),
+    allowed_scopes: row.allowed_scopes ? JSON.parse(row.allowed_scopes) : config.defaultScopes
   };
 }
 

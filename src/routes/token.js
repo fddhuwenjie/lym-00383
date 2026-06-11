@@ -10,7 +10,7 @@ const {
   generateRefreshToken,
   revokeToken
 } = require('../data');
-const { signAccessToken } = require('../jwt');
+const { signAccessToken, verifyJwt } = require('../jwt');
 const { verifyCodeChallenge } = require('../pkce');
 const config = require('../config');
 
@@ -160,6 +160,16 @@ async function handleAuthorizationCodeGrant(req, res, client, code, redirect_uri
     });
   }
 
+  const codeScopes = authCode.scope ? authCode.scope.split(' ').filter(Boolean) : [];
+  const clientAllowedScopes = client.allowed_scopes || [];
+  const allAllowed = codeScopes.every(s => clientAllowedScopes.includes(s));
+  if (!allAllowed) {
+    return res.status(400).json({
+      error: 'invalid_scope',
+      error_description: `Scope exceeds client allowed_scopes. Allowed: ${clientAllowedScopes.join(' ')}`
+    });
+  }
+
   const refreshTokenValue = generateRefreshToken();
   const refreshExpiresAt = Math.floor(Date.now() / 1000) + config.refreshTokenTTL;
 
@@ -231,14 +241,32 @@ async function handleRefreshTokenGrant(req, res, client, refreshTokenValue, scop
   if (scope) {
     const requestedScopes = scope.split(' ');
     const originalScopes = oldRefreshToken.scope.split(' ');
-    const allValid = requestedScopes.every(s => originalScopes.includes(s));
-    if (!allValid) {
+    const allInOriginal = requestedScopes.every(s => originalScopes.includes(s));
+    if (!allInOriginal) {
       return res.status(400).json({
         error: 'invalid_scope',
         error_description: 'Requested scope exceeds original scope'
       });
     }
+    const clientAllowedScopes = client.allowed_scopes || [];
+    const allAllowedByClient = requestedScopes.every(s => clientAllowedScopes.includes(s));
+    if (!allAllowedByClient) {
+      return res.status(400).json({
+        error: 'invalid_scope',
+        error_description: `Requested scope exceeds client allowed_scopes. Allowed: ${clientAllowedScopes.join(' ')}`
+      });
+    }
     newScope = scope;
+  } else {
+    const originalScopes = oldRefreshToken.scope ? oldRefreshToken.scope.split(' ').filter(Boolean) : [];
+    const clientAllowedScopes = client.allowed_scopes || [];
+    const allAllowedByClient = originalScopes.every(s => clientAllowedScopes.includes(s));
+    if (!allAllowedByClient) {
+      return res.status(400).json({
+        error: 'invalid_scope',
+        error_description: `Original token scope exceeds client allowed_scopes. Allowed: ${clientAllowedScopes.join(' ')}`
+      });
+    }
   }
 
   const user = getUserById(oldRefreshToken.user_id);
@@ -279,5 +307,138 @@ async function handleRefreshTokenGrant(req, res, client, refreshTokenValue, scop
     scope: newScope
   });
 }
+
+router.post('/token/downscope', express.urlencoded({ extended: true }), async (req, res) => {
+  const { access_token, scope } = req.body;
+
+  const clientAuth = extractClientAuth(req);
+  if (!clientAuth || !clientAuth.client_id) {
+    return res.status(401).json({
+      error: 'invalid_client',
+      error_description: 'Client authentication is required'
+    });
+  }
+
+  const client = getClientById(clientAuth.client_id);
+  if (!client) {
+    return res.status(401).json({
+      error: 'invalid_client',
+      error_description: 'Unknown client'
+    });
+  }
+
+  if (client.client_type === 'confidential') {
+    if (!verifyClientCredentials(clientAuth.client_id, clientAuth.client_secret)) {
+      return res.status(401).json({
+        error: 'invalid_client',
+        error_description: 'Invalid client credentials'
+      });
+    }
+  }
+
+  if (!access_token) {
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'access_token is required'
+    });
+  }
+
+  if (!scope) {
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'scope is required for downscoping'
+    });
+  }
+
+  const jwtResult = await verifyJwt(access_token);
+  if (!jwtResult.valid) {
+    return res.status(400).json({
+      error: 'invalid_token',
+      error_description: 'Invalid access token: ' + jwtResult.error
+    });
+  }
+
+  const tokenRecord = getToken(access_token);
+  if (!tokenRecord || tokenRecord.token_type !== 'access_token') {
+    return res.status(400).json({
+      error: 'invalid_token',
+      error_description: 'Access token not found'
+    });
+  }
+
+  if (tokenRecord.revoked === 1) {
+    return res.status(400).json({
+      error: 'invalid_token',
+      error_description: 'Access token has been revoked'
+    });
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (tokenRecord.expires_at && tokenRecord.expires_at < now) {
+    return res.status(400).json({
+      error: 'invalid_token',
+      error_description: 'Access token has expired'
+    });
+  }
+
+  if (tokenRecord.client_id !== client.client_id) {
+    return res.status(400).json({
+      error: 'invalid_token',
+      error_description: 'Access token was not issued to this client'
+    });
+  }
+
+  const originalScopes = tokenRecord.scope ? tokenRecord.scope.split(' ').filter(Boolean) : [];
+  const requestedScopes = scope.split(' ').filter(Boolean);
+
+  if (requestedScopes.length === 0) {
+    return res.status(400).json({
+      error: 'invalid_scope',
+      error_description: 'At least one scope must be requested'
+    });
+  }
+
+  const allInOriginal = requestedScopes.every(s => originalScopes.includes(s));
+  if (!allInOriginal) {
+    return res.status(400).json({
+      error: 'invalid_scope',
+      error_description: 'Requested scope must be a subset of the original token scope'
+    });
+  }
+
+  const clientAllowedScopes = client.allowed_scopes || [];
+  const allAllowedByClient = requestedScopes.every(s => clientAllowedScopes.includes(s));
+  if (!allAllowedByClient) {
+    return res.status(400).json({
+      error: 'invalid_scope',
+      error_description: `Requested scope exceeds client allowed_scopes. Allowed: ${clientAllowedScopes.join(' ')}`
+    });
+  }
+
+  const remainingSeconds = tokenRecord.expires_at - now;
+  const newExpiresIn = Math.min(remainingSeconds, config.accessTokenTTL);
+
+  const originalPayload = jwtResult.payload;
+  const newPayload = {
+    sub: originalPayload.sub,
+    scope: scope,
+    client_id: client.client_id,
+    username: originalPayload.username,
+    name: originalPayload.name,
+    email: originalPayload.email
+  };
+
+  const newAccessToken = await signAccessToken(newPayload, newExpiresIn);
+
+  storeToken('access_token', newAccessToken, client.client_id, tokenRecord.user_id, scope,
+    now + newExpiresIn, null);
+
+  return res.json({
+    access_token: newAccessToken,
+    token_type: 'Bearer',
+    expires_in: newExpiresIn,
+    scope: scope
+  });
+});
 
 module.exports = router;
